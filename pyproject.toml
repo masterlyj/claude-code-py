@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.138.0",
     "httpx[http2]>=0.28.1",
     "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
     "uvicorn>=0.49.0",
 ]
 
