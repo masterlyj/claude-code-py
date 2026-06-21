@@ -47,28 +47,31 @@ async def query(messages, options):
 ```
 claude-code-py/
   core/
-    query.py          # 核心流式循环 + 工具调用递归
-    engine.py         # QueryEngine：会话状态 + 权限中间件
+    query.py          # 核心流式循环 + 工具调用递归（已实现）
+    engine.py         # QueryEngine：会话状态 + 权限中间件（待实现）
   tools/
-    base.py           # BaseTool 抽象基类 + ToolUseContext
-    bash.py           # BashTool
-    file_read.py      # FileReadTool
-    file_edit.py      # FileEditTool
-    registry.py       # 工具注册表 + 查找
+    base.py           # BaseTool 抽象基类 + ToolUseContext（已实现）
+    bash.py           # BashTool（已实现）
+    file_read.py      # FileReadTool（已实现）
+    file_edit.py      # FileEditTool（已实现）
+    file_write.py     # FileWriteTool（已实现）
+    registry.py       # 工具注册表 get_tools() / find_tool()（已实现）
   permissions/
-    manager.py        # 规则引擎 + 权限模式
-    rules.py          # 规则匹配（支持 Bash(git:*) 通配符）
+    manager.py        # 五步权限决策流水线（已实现）
+    rules.py          # 规则类型 + 解析（支持 Bash(git:*) 通配符）（已实现）
   api/
-    main.py           # FastAPI 入口 + SSE 端点
-    schemas.py        # Pydantic 请求/响应模型
+    main.py           # FastAPI 入口 + SSE 端点（待实现）
   notebooks/
-    01_query_loop.ipynb     # 逐步验证核心循环
-    02_tool_execution.ipynb # 逐步验证各工具
-    03_permissions.ipynb    # 验证规则匹配逻辑
+    01_query_loop.ipynb     # 验证核心循环 + 工具调用（已验证）
   tests/
-    test_query.py
-    test_tools.py
-    test_permissions.py
+    conftest.py             # pytest fixture（bypass_ctx）
+    test_permissions.py     # 权限系统测试（16 个）
+    test_tools.py           # 工具测试（15 个）
+    test_registry.py        # 注册表测试（8 个）
+  docs/
+    architecture.md   # 架构说明（公开）
+    tools.md          # 工具接口文档（公开）
+    mapping.md        # TS ↔ Python 对照表（本地，不提交）
 ```
 
 ## 技术栈
@@ -88,20 +91,22 @@ claude-code-py/
 # 安装依赖
 uv sync
 
-# 启动 API 服务
-uv run uvicorn api.main:app --reload
-
 # 运行测试
 uv run pytest
 
-# 启动 Jupyter
+# 启动 Jupyter 逐步调试
 uv run jupyter lab
+
+# 启动 API 服务（api/main.py 待实现后可用）
+# uv run uvicorn api.main:app --reload
 ```
 
 ## 学习路径
 
-1. **`core/query.py`** — 从这里开始，递归工具循环是核心。
-2. **`tools/base.py`** → `tools/bash.py` — 理解工具的定义和执行方式。
-3. **`permissions/manager.py`** — 系统如何决定哪些工具可以运行。
-4. **`core/engine.py`** — 会话状态与查询循环如何连接。
-5. **`api/main.py`** — 流式事件如何通过 SSE 推送到前端。
+| 步骤 | 文件 | 学到什么 | 状态 |
+|------|------|---------|------|
+| 1 | `core/query.py` | Agent 循环的核心：如何递归处理工具调用 | ✅ 已实现 |
+| 2 | `tools/base.py` + `tools/bash.py` | 工具的定义方式和执行机制 | ✅ 已实现 |
+| 3 | `permissions/manager.py` | 权限系统：规则引擎和模式决策 | ✅ 已实现 |
+| 4 | `core/engine.py` | 会话状态管理和权限中间件 | 🔲 待实现 |
+| 5 | `api/main.py` | 流式事件通过 SSE 推送到前端 | 🔲 待实现 |
