@@ -35,7 +35,7 @@
 
 **实现细节**
 
-优先使用 `asyncio.create_subprocess_exec` 实现逐行流式输出。Windows `SelectorEventLoop`（如 Jupyter）不支持异步子进程时，自动降级为 `subprocess.run` + `run_in_executor`（一次性返回全部输出）。
+使用 `asyncio.create_subprocess_exec` 逐行流式读取 stdout。Python 3.8+ 起 Windows asyncio 默认使用 `ProactorEventLoop`，原生支持异步子进程，无需降级路径。
 
 **对应原版**
 

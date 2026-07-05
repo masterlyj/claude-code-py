@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
 import sys
 from typing import Any, AsyncIterator
 
@@ -13,26 +12,12 @@ _SHELL = ["powershell", "-Command"] if sys.platform == "win32" else ["bash", "-c
 _DEFAULT_TIMEOUT = 30
 
 
-def _run_command_sync(shell: list[str], command: str, timeout: int) -> tuple[str, int]:
-    """同步执行 shell 命令，返回 (完整输出, 退出码)。
-
-    仅作为降级方案：Windows SelectorEventLoop 不支持异步子进程时，
-    由 execute() 通过 run_in_executor 在线程池中调用。
-    """
-    result = subprocess.run(
-        shell + [command],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=timeout,
-    )
-    return result.stdout.decode(errors="replace"), result.returncode
-
-
 class BashTool(BaseTool):
-    """在本地 shell 中执行命令，流式 yield 每行输出。
+    """在本地 shell 中执行命令，逐行流式 yield 输出。
 
-    优先使用异步子进程（逐行流式）；Windows SelectorEventLoop 下自动降级为
-    线程池执行（命令完成后一次性返回），保证跨平台兼容。
+    Windows 上通过 powershell 执行，其他平台通过 bash 执行。
+    依赖 asyncio 原生异步子进程（Python 3.8+ 起 Windows 默认使用
+    ProactorEventLoop，无需额外降级处理）。
     """
 
     def __init__(self, timeout: int = _DEFAULT_TIMEOUT) -> None:
@@ -94,26 +79,13 @@ class BashTool(BaseTool):
             )
             assert process.stdout is not None
 
-            async for line in process.stdout:  # type: ignore[union-attr]
+            async for line in process.stdout:
                 yield line.decode(errors="replace")
 
             await asyncio.wait_for(process.wait(), timeout=timeout)
 
             if process.returncode and process.returncode != 0:
                 yield f"\n[退出码: {process.returncode}]\n"
-
-        except NotImplementedError:
-            # Windows SelectorEventLoop 不支持异步子进程，降级到线程池
-            try:
-                loop = asyncio.get_running_loop()
-                output, returncode = await loop.run_in_executor(
-                    None, _run_command_sync, _SHELL, command, timeout
-                )
-                yield output
-                if returncode != 0:
-                    yield f"\n[退出码: {returncode}]\n"
-            except subprocess.TimeoutExpired:
-                yield f"[命令超时：{timeout} 秒后终止]\n"
 
         except asyncio.TimeoutError:
             yield f"[命令超时：{timeout} 秒后终止]\n"
