@@ -48,7 +48,8 @@ async def query(messages, options):
 claude-code-py/
   core/
     query.py          # 核心流式循环 + 工具调用递归（已实现）
-    engine.py         # QueryEngine：会话状态 + 权限中间件（待实现）
+    models.py         # 对外契约：QueryParams / EngineConfig / 7 类流式事件（已实现）
+    engine.py         # QueryEngine：会话状态、多轮消息累积、中止响应（已实现）
   tools/
     base.py           # BaseTool 抽象基类 + ToolUseContext（已实现）
     bash.py           # BashTool（已实现）
@@ -109,5 +110,5 @@ uv run python scripts/demo_query.py tools    # 仅工具调用循环
 | 1 | `core/query.py` | Agent 循环的核心：如何递归处理工具调用 | ✅ 已实现 |
 | 2 | `tools/base.py` + `tools/bash.py` | 工具的定义方式和执行机制 | ✅ 已实现 |
 | 3 | `permissions/manager.py` | 权限系统：规则引擎和模式决策 | ✅ 已实现 |
-| 4 | `core/engine.py` | 会话状态管理和权限中间件 | 🔲 待实现 |
+| 4 | `core/engine.py` | 会话状态、多轮消息累积、中止响应 | ✅ 已实现 |
 | 5 | `api/main.py` | 流式事件通过 SSE 推送到前端 | 🔲 待实现 |

@@ -37,12 +37,12 @@ async def query(messages, options):
 
 ```
 claude-code-py/
-  core/         # 核心循环：query.py（循环）、engine.py（编排，待实现）
+  core/         # 核心：query.py（单轮循环）、engine.py（多轮会话编排）、models.py（对外契约）
   tools/        # 工具系统：base.py（接口）、bash.py、file_read.py 等
   permissions/  # 权限系统：哪些工具可以在什么条件下执行
   api/          # FastAPI 服务：SSE 流式推送给前端（待实现）
-  notebooks/    # Jupyter：逐步验证每个模块
-  tests/        # pytest：回归测试
+  scripts/      # 端到端手动烟测：真实 API 观察事件流
+  tests/        # pytest：回归测试（48 个）
   docs/         # 文档：架构说明、工具接口、TS↔Python 对照
 ```
 
@@ -51,6 +51,8 @@ claude-code-py/
 | 模块 | 文件 | 状态 |
 |------|------|------|
 | 核心循环 | `core/query.py` | ✅ 已实现并验证 |
+| 对外契约 | `core/models.py` | ✅ 已实现 |
+| 会话编排 | `core/engine.py` | ✅ 已实现并验证 |
 | 工具基类 | `tools/base.py` | ✅ 已实现 |
 | Bash 工具 | `tools/bash.py` | ✅ 已实现并验证 |
 | 文件读取 | `tools/file_read.py` | ✅ 已实现并验证 |
@@ -59,7 +61,6 @@ claude-code-py/
 | 工具注册表 | `tools/registry.py` | ✅ 已实现 |
 | 权限规则 | `permissions/rules.py` | ✅ 已实现并验证 |
 | 权限管理器 | `permissions/manager.py` | ✅ 已实现并验证 |
-| 会话编排 | `core/engine.py` | 🔲 待实现 |
 | FastAPI 入口 | `api/main.py` | 🔲 待实现 |
 | Vue 前端 | `frontend/` | 🔲 待实现 |
 
@@ -69,7 +70,6 @@ claude-code-py/
 - **Anthropic Python SDK**（LLM 调用）
 - **FastAPI**（API 服务 + SSE 流式响应）
 - **Pydantic**（数据模型）
-- **JupyterLab**（交互式调试）
 - **pytest + pytest-asyncio**（测试）
 
 ## 快速开始
@@ -78,11 +78,12 @@ claude-code-py/
 # 克隆后安装依赖
 uv sync
 
-# 运行测试（39 个，全绿）
+# 运行测试（48 个，全绿）
 uv run pytest
 
-# 启动 Jupyter 逐步调试
-uv run jupyter lab
+# 端到端手动烟测（需 .env 里配置 ANTHROPIC_API_KEY）
+uv run python scripts/demo_query.py            # 全部场景
+uv run python scripts/demo_query.py session    # 仅 QueryEngine 多轮对话
 
 # 启动 API 服务（待实现后可用）
 uv run uvicorn api.main:app --reload
@@ -96,5 +97,5 @@ uv run uvicorn api.main:app --reload
 | 2 | `tools/base.py` → `tools/bash.py` | 工具的抽象接口与具体实现 | ✅ |
 | 3 | `permissions/rules.py` + `manager.py` | 权限规则解析与五步决策流水线 | ✅ |
 | 4 | `tools/registry.py` | 工具注册与查找机制 | ✅ |
-| 5 | `core/engine.py` | 会话状态管理和权限中间件 | 🔲 |
+| 5 | `core/engine.py` | 会话状态管理和多轮消息累积 | ✅ |
 | 6 | `api/main.py` | 流式事件通过 SSE 推送到前端 | 🔲 |
