@@ -63,9 +63,8 @@ class ValidationResult(BaseModel):
 class ToolUseContext:
     """工具执行时的运行时上下文，由 query 循环注入。
 
-    包含工具执行所需的全局状态：权限管理器、会话配置、
-    以及取消信号等。使用 dataclass 而非 Pydantic，
-    因为它是内部可变状态容器，不需要序列化或外部校验。
+    包含工具执行所需的全局状态：权限管理器、会话配置、以及取消信号等。
+    使用 dataclass 而非 Pydantic，因为它是内部可变状态容器，不需要序列化或外部校验。
 
     Args:
         permission_manager: 执行前的权限决策器。
