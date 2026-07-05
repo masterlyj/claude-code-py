@@ -2,9 +2,10 @@
 
 使用方式（在项目根目录执行）：
 
-    uv run python scripts/demo_query.py           # 两个场景都跑
+    uv run python scripts/demo_query.py           # 全部场景
     uv run python scripts/demo_query.py chat      # 只跑纯对话
     uv run python scripts/demo_query.py tools     # 只跑工具调用循环
+    uv run python scripts/demo_query.py session   # 只跑 QueryEngine 多轮会话
 
 需要 .env 里配置 ANTHROPIC_API_KEY；可选 MODEL_ID 覆盖默认模型。
 
@@ -25,10 +26,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
 
+from core.engine import QueryEngine
 from core.models import (
+    EngineConfig,
     MessageCompleteEvent,
     QueryParams,
     StreamRequestStartEvent,
+    SubmitResultEvent,
     TextDeltaEvent,
     ToolResultEvent,
     ToolUseEvent,
@@ -96,6 +100,41 @@ async def demo_tools() -> None:
             print(f"\n[完成] stop_reason={event.stop_reason}")
 
 
+async def demo_session() -> None:
+    """场景 3：QueryEngine 多轮会话，验证消息历史跨调用累积。
+
+    连续两次 submit_message：第二次应能引用第一次说过的内容，
+    结束后打印累计 usage 与消息数，确认状态正确累加。
+    """
+    print("\n=== 场景 3：QueryEngine 多轮会话 ===")
+    config = EngineConfig(
+        system_prompt="你是一个简洁的助手，回答不超过一句话。",
+        model=MODEL_ID,
+        api_key=API_KEY,
+        max_turns_per_submit=3,
+    )
+    manager = PermissionManager(PermissionContext(mode=PermissionMode.BYPASS))
+    engine = QueryEngine(config, tools=[], permission_manager=manager)
+
+    async def run_turn(prompt: str, label: str) -> None:
+        print(f"\n[{label}] 用户：{prompt}")
+        print(f"[{label}] 模型：", end="", flush=True)
+        async for event in engine.submit_message(prompt):
+            if isinstance(event, TextDeltaEvent):
+                print(event.text, end="", flush=True)
+            elif isinstance(event, SubmitResultEvent):
+                print(
+                    f"\n[{label}] 结束：subtype={event.subtype}, "
+                    f"turns={event.num_turns}, usage={event.total_usage}"
+                )
+
+    await run_turn("我叫小明。", "第 1 轮")
+    await run_turn("我叫什么名字？", "第 2 轮")
+
+    print(f"\n累计消息数：{len(engine.messages)}")
+    print(f"累计 usage：{engine.total_usage}")
+
+
 async def main() -> None:
     if not API_KEY:
         print("未找到 ANTHROPIC_API_KEY，请在项目根目录创建 .env 文件", file=sys.stderr)
@@ -108,6 +147,8 @@ async def main() -> None:
         await demo_chat()
     if which in {"all", "tools"}:
         await demo_tools()
+    if which in {"all", "session"}:
+        await demo_session()
 
 
 if __name__ == "__main__":

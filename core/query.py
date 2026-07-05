@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -14,6 +15,7 @@ import anthropic
 
 from core.models import (
     MessageCompleteEvent,
+    QueryCompleteEvent,
     QueryParams,
     StreamEvent,
     StreamRequestStartEvent,
@@ -55,6 +57,7 @@ async def query(
     params: QueryParams,
     tools: list[BaseTool],
     permission_manager: PermissionManager,
+    abort_event: asyncio.Event | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Agent 查询入口，流式 yield 每个事件直到对话结束。
 
@@ -68,18 +71,21 @@ async def query(
         params: 包含消息历史、模型配置等可序列化的查询参数。
         tools: 本轮可用的工具实例列表。
         permission_manager: 工具执行前的权限决策器。
+        abort_event: 可选的中止信号，QueryEngine 传入用于响应用户中断。
+            循环在每轮开头 check；set 后当前轮 API 请求返回后即结束。
 
     Yields:
         StreamEvent 的各子类型，顺序为：
         StreamRequestStartEvent → TextDeltaEvent* → ToolUseEvent* →
-        ToolResultEvent* → MessageCompleteEvent,循环直至结束。
+        ToolResultEvent* → MessageCompleteEvent, 循环直至结束；
+        循环结束后 yield 一个 QueryCompleteEvent，携带最终消息历史。
 
     Raises:
         anthropic.APIError: API 调用失败时透传原始异常。
     """
     state = QueryState(messages=list(params.messages))
 
-    async for event in _query_loop(params, tools, permission_manager, state):
+    async for event in _query_loop(params, tools, permission_manager, state, abort_event):
         yield event
 
 
@@ -88,6 +94,7 @@ async def _query_loop(
     tools: list[BaseTool],
     permission_manager: PermissionManager,
     state: QueryState,
+    abort_event: asyncio.Event | None,
 ) -> AsyncIterator[StreamEvent]:
     """query() 的内部循环实现，每次迭代对应一轮模型调用。
 
@@ -96,14 +103,21 @@ async def _query_loop(
         tools: 本轮可用的工具列表。
         permission_manager: 权限决策器。
         state: 跨迭代共享的可变状态，每轮结束后整体替换。
+        abort_event: 中止信号；在每轮开头 check，set 时立即结束循环。
 
     Yields:
         与 query() 相同的 StreamEvent 序列。
     """
     client = anthropic.AsyncAnthropic(api_key=params.api_key)
     tool_schemas = [t.to_api_schema() for t in tools]
+    stopped_reason: str = "end_turn"
 
     while True:
+        # 中止在轮次边界响应：粒度足够，避免中断已发出的 API 请求造成状态混乱
+        if abort_event is not None and abort_event.is_set():
+            stopped_reason = "aborted"
+            break
+
         yield StreamRequestStartEvent()
 
         pending_tool_uses: list[dict[str, Any]] = []
@@ -111,6 +125,7 @@ async def _query_loop(
         stop_reason = "end_turn"
         usage: dict[str, int] = {}
 
+        # 流式调用 API，按事件类型处理：文本增量、工具调用、token 统计等
         async with client.messages.stream(
             model=params.model,
             max_tokens=params.max_tokens,
@@ -119,14 +134,17 @@ async def _query_loop(
             tools=tool_schemas if tool_schemas else anthropic.NOT_GIVEN,
         ) as stream:
             async for event in stream:
+                # 处理文本增量事件：实时推流给前端
                 if event.type == "content_block_delta":
                     if event.delta.type == "text_delta":
                         accumulated_text += event.delta.text
                         yield TextDeltaEvent(text=event.delta.text)
 
+                # 处理消息中间结果：记录最终的停止原因
                 elif event.type == "message_delta":
                     stop_reason = event.delta.stop_reason or "end_turn"
 
+                # 处理消息流结束：提取最终内容和 token 统计
                 elif event.type == "message_stop":
                     final_msg = await stream.get_final_message()
                     usage = {
@@ -136,6 +154,7 @@ async def _query_loop(
                             final_msg.usage, "cache_read_input_tokens", 0
                         ),
                     }
+                    # 提取工具调用块，缓存待执行
                     for block in final_msg.content:
                         if block.type == "tool_use":
                             pending_tool_uses.append({
@@ -149,7 +168,7 @@ async def _query_loop(
                                 tool_input=block.input,
                             )
 
-        # 将本轮助手回复追加到消息历史
+        # 构建助手消息内容：保存文本和工具调用块到消息历史
         assistant_content: list[dict[str, Any]] = []
         if accumulated_text:
             assistant_content.append({"type": "text", "text": accumulated_text})
@@ -161,6 +180,7 @@ async def _query_loop(
                 "input": tool_use["input"],
             })
 
+        # 更新状态：追加本轮对话，增加轮次计数
         state = QueryState(
             messages=state.messages + [{"role": "assistant", "content": assistant_content}],
             turn_count=state.turn_count + 1,
@@ -168,24 +188,31 @@ async def _query_loop(
 
         yield MessageCompleteEvent(stop_reason=stop_reason, usage=usage)
 
+        # 判断是否需要继续：模型未请求工具或工具列表为空时结束
         if stop_reason != "tool_use" or not pending_tool_uses:
+            stopped_reason = "end_turn"
             break
 
+        # 检查轮次限制：超过最大轮次时强制结束
         if params.max_turns is not None and state.turn_count >= params.max_turns:
+            stopped_reason = "max_turns"
             break
 
-        # 执行所有工具调用，收集结果后一次性追加为 user 消息
+        # 执行本轮所有工具调用，批量收集结果后一次性追加为 user 消息
+        # 原因：Anthropic API 要求工具结果必须作为 user 消息追加
         tool_results: list[dict[str, Any]] = []
         for tool_use in pending_tool_uses:
             result_content, is_error = await _execute_tool(
                 tool_use, tools, permission_manager
             )
+            # 实时推流工具执行结果给前端
             yield ToolResultEvent(
                 tool_use_id=tool_use["id"],
                 tool_name=tool_use["name"],
                 content=result_content,
                 is_error=is_error,
             )
+            # 缓存结果用于消息历史
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_use["id"],
@@ -193,10 +220,18 @@ async def _query_loop(
                 "is_error": is_error,
             })
 
+        # 更新状态：追加工具结果消息，继续下一轮
         state = QueryState(
             messages=state.messages + [{"role": "user", "content": tool_results}],
             turn_count=state.turn_count,
         )
+
+    # 循环退出后 yield 最终事件，让上层拿到完整消息历史（供多轮会话继续用）
+    yield QueryCompleteEvent(
+        final_messages=state.messages,
+        total_turns=state.turn_count,
+        stopped_reason=stopped_reason,  # type: ignore[arg-type]
+    )
 
 
 async def _execute_tool(
