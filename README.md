@@ -7,7 +7,7 @@
 - 理解 Agent 核心循环：LLM 如何通过工具调用递归驱动任务执行
 - 掌握 FastAPI 流式响应（SSE）的后端实现方式
 - 理解权限系统、会话管理和上下文处理的设计思路
-- 每个模块独立可验证：Jupyter 逐步调试 + pytest 回归测试
+- 每个模块独立可验证：pytest 回归测试 + 端到端手动烟测脚本
 
 ## 架构总览
 
@@ -61,8 +61,8 @@ claude-code-py/
     rules.py          # 规则类型 + 解析（支持 Bash(git:*) 通配符）（已实现）
   api/
     main.py           # FastAPI 入口 + SSE 端点（待实现）
-  notebooks/
-    01_query_loop.ipynb     # 验证核心循环 + 工具调用（已验证）
+  scripts/
+    demo_query.py     # 端到端手动烟测：真实 API 跑一遍 query() 事件流
   tests/
     conftest.py             # pytest fixture（bypass_ctx）
     test_permissions.py     # 权限系统测试（16 个）
@@ -83,7 +83,6 @@ claude-code-py/
 | API 框架 | FastAPI | 异步、支持 SSE、Pydantic 集成 |
 | LLM SDK | anthropic | 官方 Python SDK |
 | 测试 | pytest + pytest-asyncio | 标准、支持异步 |
-| 调试验证 | JupyterLab | 逐步运行验证每个函数 |
 
 ## 快速开始
 
@@ -94,8 +93,10 @@ uv sync
 # 运行测试
 uv run pytest
 
-# 启动 Jupyter 逐步调试
-uv run jupyter lab
+# 端到端手动烟测：真实调用一次 API 观察事件流
+uv run python scripts/demo_query.py          # 跑两个场景
+uv run python scripts/demo_query.py chat     # 仅纯对话
+uv run python scripts/demo_query.py tools    # 仅工具调用循环
 
 # 启动 API 服务（api/main.py 待实现后可用）
 # uv run uvicorn api.main:app --reload
