@@ -1,0 +1,9 @@
+node_modules
+dist
+*.log
+.vite
+*.tsbuildinfo
+# vue-tsc -b 会把 .ts/.vue 编出同名 .js/.vue.js 副产物到源码目录旁，
+# 这些是构建缓存不该入库；生产构建走 vite build 输出到 dist/
+src/**/*.js
+src/**/*.vue.js
