@@ -1,8 +1,8 @@
 """Agent 核心查询循环，负责流式调用 LLM 并递归处理工具调用。
 
-本模块是整个 Agent 系统的心脏。query() 是对外唯一入口，
-内部通过 _query_loop() 实现"调用模型 → 执行工具 → 追加结果 → 继续"的循环，
-直到模型不再请求工具或达到最大轮次为止。
+本模块是整个 Agent 系统的心脏。query() 是对外唯一入口，内部用
+"调用模型 → 执行工具 → 追加结果 → 继续"的 while 循环，直到模型不再
+请求工具或达到最大轮次为止。
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class QueryState:
-    """_query_loop() 迭代间共享的可变状态。
+    """query() 循环迭代间共享的可变状态。
 
     每次 continue 时整体替换（state = QueryState(...)），
     避免多处零散赋值导致状态不一致。
@@ -61,11 +61,8 @@ async def query(
 ) -> AsyncIterator[StreamEvent]:
     """Agent 查询入口，流式 yield 每个事件直到对话结束。
 
-    调用方通过 async for 消费事件流，可实时渲染文本、展示工具调用、
-    更新 token 统计等，无需等待整轮完成。
-
-    工具列表和权限管理器从外部注入而非放在 QueryParams，
-    原因是两者包含不可序列化的对象，不适合走 Pydantic 校验。
+    调用方通过 async for 消费事件流，可实时渲染文本、展示工具调用、更新 token 统计等，无需等待整轮完成。
+    工具列表和权限管理器从外部注入而非放在 QueryParams，原因是两者包含不可序列化的对象，不适合走 Pydantic 校验。
 
     Args:
         params: 包含消息历史、模型配置等可序列化的查询参数。
@@ -84,30 +81,6 @@ async def query(
         anthropic.APIError: API 调用失败时透传原始异常。
     """
     state = QueryState(messages=list(params.messages))
-
-    async for event in _query_loop(params, tools, permission_manager, state, abort_event):
-        yield event
-
-
-async def _query_loop(
-    params: QueryParams,
-    tools: list[BaseTool],
-    permission_manager: PermissionManager,
-    state: QueryState,
-    abort_event: asyncio.Event | None,
-) -> AsyncIterator[StreamEvent]:
-    """query() 的内部循环实现，每次迭代对应一轮模型调用。
-
-    Args:
-        params: 不可变的查询参数，整个循环期间不变。
-        tools: 本轮可用的工具列表。
-        permission_manager: 权限决策器。
-        state: 跨迭代共享的可变状态，每轮结束后整体替换。
-        abort_event: 中止信号；在每轮开头 check，set 时立即结束循环。
-
-    Yields:
-        与 query() 相同的 StreamEvent 序列。
-    """
     client = anthropic.AsyncAnthropic(api_key=params.api_key)
     tool_schemas = [t.to_api_schema() for t in tools]
     stopped_reason: str = "end_turn"
@@ -241,8 +214,7 @@ async def _execute_tool(
 ) -> tuple[str, bool]:
     """执行单个工具调用，返回结果文本和是否出错的标志。
 
-    执行前先通过 permission_manager 做权限校验，
-    再通过工具自身的 validate_input() 做参数校验，
+    执行前先通过 permission_manager 做权限校验，再通过工具自身的 validate_input() 做参数校验，
     拒绝时返回拒绝原因而不抛异常，让模型感知并自行决策。
 
     Args:

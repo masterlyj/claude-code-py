@@ -171,7 +171,7 @@ tool = find_tool("Read", tools)   # 在指定列表中查找
 工具 schema 是静态内容，每次请求重复传递会浪费 token。后续在 `core/query.py` 中对 `tools` 参数加 `cache_control`，利用 Anthropic Prompt Caching 降低成本：
 
 ```python
-# 二期：在 _query_loop 中对工具 schema 加缓存标记
+# 二期：在 query() 循环中对工具 schema 加缓存标记
 # 将固定的 tools 放在 cache_control breakpoint 之前
 ```
 
