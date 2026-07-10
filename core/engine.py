@@ -28,7 +28,7 @@ from core.models import (
     StreamEvent,
     SubmitResultEvent,
 )
-from core.query import query
+from core.query import AskUserCallback, query
 from permissions.manager import PermissionManager
 from permissions.rules import PermissionDecision
 
@@ -59,10 +59,12 @@ class QueryEngine:
         config: EngineConfig,
         tools: list[BaseTool],
         permission_manager: PermissionManager,
+        ask_user: AskUserCallback | None = None,
     ) -> None:
         self._config = config
         self._tools = tools
         self._permission_manager = permission_manager
+        self._ask_user = ask_user
         self._messages: list[dict[str, Any]] = []
         self._total_usage: dict[str, int] = {
             "input_tokens": 0,
@@ -141,7 +143,13 @@ class QueryEngine:
         result_subtype: str = "success"
         num_turns = 0
 
-        async for event in query(params, self._tools, wrapped_manager, self._abort_event):
+        async for event in query(
+            params,
+            self._tools,
+            wrapped_manager,
+            self._abort_event,
+            ask_user=self._ask_user,
+        ):
             if isinstance(event, MessageCompleteEvent):
                 self._accumulate_usage(event.usage)
 
@@ -197,7 +205,10 @@ class _DenialTrackingPermissionManager(PermissionManager):
         tool_input: dict[str, Any],
     ) -> PermissionDecision:
         decision = await self._inner.check(tool, tool_input)
-        if decision.behavior != "allow":
+        # 只记录明确的 Deny：Ask 属于"未决"，最终结果取决于 ask_user 的回答，
+        # 由 query() 层根据用户回应决定放行或拒绝；此处若把 Ask 也当拒绝记，
+        # 会在用户同意的场景里制造误报。
+        if decision.behavior == "deny":
             self._denials_sink.append({
                 "tool_name": tool.name,
                 "tool_input": tool_input,

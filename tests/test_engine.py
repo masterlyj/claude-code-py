@@ -53,6 +53,7 @@ def make_fake_query(
         tools: Any,
         permission_manager: Any,
         abort_event: Any = None,
+        ask_user: Any = None,
     ) -> AsyncIterator[StreamEvent]:
         for event in script(params):
             yield event
@@ -269,6 +270,7 @@ async def test_abort_sets_the_shared_event(
         tools: Any,
         permission_manager: Any,
         abort_event: Any = None,
+        ask_user: Any = None,
     ) -> AsyncIterator[StreamEvent]:
         captured_abort_event.append(abort_event)
         yield QueryCompleteEvent(
@@ -320,6 +322,7 @@ async def test_permission_denials_recorded_when_wrapped_manager_denies(
         tools: Any,
         permission_manager: Any,
         abort_event: Any = None,
+        ask_user: Any = None,
     ) -> AsyncIterator[StreamEvent]:
         # Simulate query() invoking permission checks like _execute_tool does
         # We use a stub tool object with just a .name attribute
@@ -363,6 +366,7 @@ async def test_submit_result_denials_are_window_scoped_not_cumulative(
         tools: Any,
         permission_manager: Any,
         abort_event: Any = None,
+        ask_user: Any = None,
     ) -> AsyncIterator[StreamEvent]:
         class _StubTool:
             name = "Bash"

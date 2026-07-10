@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 import anthropic
 
@@ -23,10 +23,23 @@ from core.models import (
     ToolResultEvent,
     ToolUseEvent,
 )
+from permissions.rules import AskDecision
 
 if TYPE_CHECKING:
     from permissions.manager import PermissionManager
     from tools.base import BaseTool
+
+
+# ── Ask 决策的用户响应回调 ────────────────────────────────────────────────
+
+# 当权限系统判定为 Ask 时由 query() 调用。返回 True 表示允许执行本次工具调用，
+# 返回 False 表示拒绝。None 语义等价于 False。
+# 回调是 async 以支持"人类通过 SSE/WebSocket 回来点确认"的异步场景，同步
+# input() 的 CLI 场景可以包一层 async 适配器（见 scripts/demo_query.py）。
+AskUserCallback = Callable[
+    [AskDecision, "BaseTool", dict[str, Any]],
+    Awaitable[bool],
+]
 
 
 # ── 内部可变状态（dataclass：循环中频繁替换，不需要序列化） ──────────────
@@ -58,6 +71,7 @@ async def query(
     tools: list[BaseTool],
     permission_manager: PermissionManager,
     abort_event: asyncio.Event | None = None,
+    ask_user: AskUserCallback | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Agent 查询入口，流式 yield 每个事件直到对话结束。
 
@@ -70,6 +84,9 @@ async def query(
         permission_manager: 工具执行前的权限决策器。
         abort_event: 可选的中止信号，QueryEngine 传入用于响应用户中断。
             循环在每轮开头 check；set 后当前轮 API 请求返回后即结束。
+        ask_user: 可选的 Ask 决策回调。权限判定为 Ask 时被调用，返回 True
+            则本次工具调用继续执行；返回 False 或未提供该回调时，Ask 会被
+            当作拒绝返回给模型（保持向后兼容）。
 
     Yields:
         StreamEvent 的各子类型，顺序为：
@@ -176,7 +193,7 @@ async def query(
         tool_results: list[dict[str, Any]] = []
         for tool_use in pending_tool_uses:
             result_content, is_error = await _execute_tool(
-                tool_use, tools, permission_manager
+                tool_use, tools, permission_manager, ask_user
             )
             # 实时推流工具执行结果给前端
             yield ToolResultEvent(
@@ -211,16 +228,24 @@ async def _execute_tool(
     tool_use: dict[str, Any],
     tools: list[BaseTool],
     permission_manager: PermissionManager,
+    ask_user: AskUserCallback | None = None,
 ) -> tuple[str, bool]:
     """执行单个工具调用，返回结果文本和是否出错的标志。
 
-    执行前先通过 permission_manager 做权限校验，再通过工具自身的 validate_input() 做参数校验，
+    执行前先通过 permission_manager 做权限校验。三种决策的处理：
+      - Allow：直接进入 validate_input → execute
+      - Deny：返回拒绝原因给模型
+      - Ask：如果提供了 ask_user 回调，调用它；用户同意则等价 Allow，
+        否则等价 Deny。ask_user 为 None 时 Ask 一律视为 Deny，保留
+        原有向后兼容行为。
+
     拒绝时返回拒绝原因而不抛异常，让模型感知并自行决策。
 
     Args:
         tool_use: 包含 id、name、input 的工具调用描述。
         tools: 可用工具列表，用于按名称查找目标工具。
         permission_manager: 权限决策器。
+        ask_user: Ask 决策的用户响应回调，参考 AskUserCallback 类型别名。
 
     Returns:
         (result_content, is_error) 元组：
@@ -238,7 +263,18 @@ async def _execute_tool(
 
     # 权限校验优先于输入校验，避免在无权限时泄露参数细节
     decision = await permission_manager.check(tool, tool_input)
-    if decision.behavior != "allow":
+
+    if isinstance(decision, AskDecision):
+        # 有回调则真的问人；没回调时保留旧行为——Ask 当拒绝，仍是安全的
+        # fail-closed 默认（对应权限系统"没人在场就不能自动放行"的语义）
+        if ask_user is None:
+            return f"权限拒绝（需要用户确认但未提供回调）：{decision.reason}", True
+        approved = await ask_user(decision, tool, tool_input)
+        if not approved:
+            return f"用户拒绝执行：{decision.reason}", True
+        # approved 之后 fallthrough 到 validate_input + execute
+    elif decision.behavior != "allow":
+        # DenyDecision
         return f"权限拒绝：{decision.reason}", True
 
     validation = await tool.validate_input(tool_input)

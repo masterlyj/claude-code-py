@@ -1,18 +1,21 @@
 """权限管理器，负责工具执行前的权限决策。
 
-实现原版的五步决策流水线：
+实现原版的六步决策流水线（顺序经对抗审查后调整）：
   1. deny 规则匹配 → 直接拒绝
   2. ask 规则匹配 → 需要用户确认
-  3. 工具自身校验（tool.check_permissions）
-  4. 模式决策（bypass / accept_edits / dont_ask / plan）
-  5. allow 规则匹配 → 直接允许
-  6. passthrough → 转为 ask
+  3. bypass / plan 模式 → 直接允许（提前到工具自检之前，
+     保持 "BYPASS regardless of rules" 的语义纯粹；对偶的
+     TS 版 bypass-immune 白名单本项目暂不实现）
+  4. 工具自身校验（tool.check_permissions），支持子命令级规则
+  5. 剩余模式决策（accept_edits / dont_ask / auto）
+  6. allow 规则匹配 → 直接允许
+  7. passthrough → 转为 ask
 
-auto 模式（ML 分类器）在二期实现，当前 fallback 到 ask。
+原为"五步"，因引入工具自身细粒度校验步骤而扩展为六步。
 
 对外暴露：
   PermissionContext — 规则集合与当前模式，不可变
-  PermissionManager — 权限决策器，执行五步流水线
+  PermissionManager — 权限决策器
 """
 
 from __future__ import annotations
@@ -172,15 +175,17 @@ def _find_rule(
 
 
 class PermissionManager:
-    """工具执行前的权限决策器，实现五步决策流水线。
+    """工具执行前的权限决策器。
 
     流水线顺序（与原版一致，fail-closed 原则）：
       步骤 1 — deny 规则：直接拒绝
       步骤 2 — ask 规则：需要用户确认
-      步骤 3 — 工具自身校验（tool.check_permissions，暂留扩展点）
-      步骤 4 — 模式决策（bypass / plan → allow；dont_ask → deny）
-      步骤 5 — allow 规则：直接允许
-      步骤 6 — passthrough → 转为 ask
+      步骤 3 — bypass / plan 模式：直接允许（提前到工具自检前，保持
+        BYPASS "regardless of rules" 语义纯粹）
+      步骤 4 — 工具自身校验（tool.check_permissions），支持子命令级规则
+      步骤 5 — 剩余模式决策（accept_edits / dont_ask / auto）
+      步骤 6 — allow 规则：直接允许
+      步骤 7 — passthrough → 转为 ask
 
     Args:
         context: 权限规则集合与模式配置。
@@ -207,7 +212,7 @@ class PermissionManager:
         tool: BaseTool,
         tool_input: dict[str, Any],
     ) -> PermissionDecision:
-        """执行完整的五步权限决策流水线。
+        """执行完整的六步权限决策流水线。
 
         Args:
             tool: 待执行的工具实例。
@@ -218,6 +223,7 @@ class PermissionManager:
         """
         ctx = self._context
         tool_name = tool.name
+        mode = ctx.mode
 
         # 步骤 1：deny 规则优先，fail-closed
         deny_rule = _find_rule(ctx.deny_rules, tool_name)
@@ -232,32 +238,39 @@ class PermissionManager:
                 rule=ask_rule,
             )
 
-        # 步骤 3：工具自身校验（扩展点，目前默认 passthrough）
-        # 二期：调用 tool.check_permissions(tool_input, context) 获取工具级细粒度规则，
-        # 例如 Bash 工具的子命令级别规则匹配（Bash(git:*)）
-        tool_check = await self._check_tool_permissions(tool, tool_input)
-        if isinstance(tool_check, DenyDecision):
-            return tool_check
-        # ask 类型的工具校验结果在步骤 4 之后处理（与原版逻辑一致）
-
-        # 步骤 4：模式决策
-        mode = ctx.mode
+        # 步骤 3：bypass / plan 模式提前放行，保持 "regardless of rules" 语义
+        # 且让工具自身校验只在受控模式下生效——避免出现"用户开了 BYPASS 但
+        # 工具自检返回 Deny 导致执行不了"的语义冲突。TS 版的 bypass-immune
+        # 白名单（.git/、.claude/ 等敏感路径即使 bypass 也要拦）本项目暂不
+        # 实现，等 P0 闭环稳定后作为独立议题。
         if mode in (PermissionMode.BYPASS, PermissionMode.PLAN):
             return AllowDecision(reason=f"权限模式 {mode.value} 允许所有工具")
 
+        # 步骤 4：工具自身校验（子命令级细粒度规则匹配）。返回：
+        #   AllowDecision：工具明确放行，直接采纳
+        #   DenyDecision：工具明确拒绝，直接采纳（此时 BYPASS 已在步骤 3 消耗）
+        #   AskDecision：工具要求人工确认，稍后与 allow 规则一起裁决
+        #   None：passthrough，交给流水线后续步骤
+        tool_check = await tool.check_permissions(tool_input, ctx)
+        if isinstance(tool_check, AllowDecision):
+            return tool_check
+        if isinstance(tool_check, DenyDecision):
+            return tool_check
+        # AskDecision 缓存至步骤 6 之后处理
+
+        # 步骤 5：剩余模式决策
         if mode == PermissionMode.DONT_ASK:
-            # dont_ask 模式将 ask 转为 deny，不展示交互对话
             return DenyDecision(reason=f"当前权限模式 {mode.value} 拒绝所有需要确认的操作")
 
         if mode == PermissionMode.ACCEPT_EDITS and tool.is_read_only(tool_input):
             return AllowDecision(reason="accept_edits 模式允许只读操作")
 
-        # 步骤 5：allow 规则
+        # 步骤 6：allow 规则
         allow_rule = _find_rule(ctx.allow_rules, tool_name)
         if allow_rule is not None:
             return AllowDecision(reason=f"allow 规则匹配：{tool_name}")
 
-        # 步骤 6：工具校验返回了 ask，现在处理
+        # 步骤 7：工具校验返回了 ask，现在处理
         if isinstance(tool_check, AskDecision):
             return tool_check
 
@@ -267,23 +280,3 @@ class PermissionManager:
 
         # default / accept_edits（非只读操作）：需要用户确认
         return AskDecision(reason=f"需要用户确认是否允许 {tool_name} 执行")
-
-    async def _check_tool_permissions(
-        self,
-        tool: BaseTool,
-        tool_input: dict[str, Any],
-    ) -> PermissionDecision | None:
-        """调用工具自身的权限校验逻辑（步骤 3 扩展点）。
-
-        目前返回 None 表示 passthrough，二期接入工具级细粒度规则。
-
-        Args:
-            tool: 待校验的工具。
-            tool_input: 工具调用参数。
-
-        Returns:
-            DenyDecision 或 AskDecision 表示工具拒绝/要求询问，
-            None 表示工具无异议（passthrough）。
-        """
-        # 二期：调用 tool.check_permissions(tool_input) 并解析结果
-        return None

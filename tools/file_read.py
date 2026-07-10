@@ -52,6 +52,10 @@ class FileReadTool(BaseTool):
             "required": ["file_path"],
         }
 
+    def is_read_only(self, tool_input: dict[str, Any]) -> bool:
+        """读取文件不改变磁盘状态，永远是只读操作。"""
+        return True
+
     async def execute(
         self,
         tool_input: dict[str, Any],

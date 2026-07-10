@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from permissions.manager import PermissionManager
+    from permissions.manager import PermissionContext, PermissionManager
+    from permissions.rules import PermissionDecision
 
 
 # ── 校验结果 ──────────────────────────────────────────────────────────────
@@ -158,6 +159,33 @@ class BaseTool(ABC):
             ValidationResult，ok=True 表示校验通过。
         """
         return ValidationResult.passed()
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision | None:
+        """工具自身的细粒度权限校验，PermissionManager 六步流水线的第 3 步。
+
+        默认返回 None 表示"无异议"（passthrough），让流水线继续进入模式判定
+        和规则匹配步骤。工具可以覆盖此方法读取规则里 rule_content 非 None
+        的部分，做子命令级判断（比如 BashTool 用 bashlex 解析出所有子命令
+        argv 后逐个匹配 `Bash(git:*)` 之类的规则）。
+
+        重要契约：如果工具**无法安全解析**输入结构（比如 bash 命令含变量
+        引用、命令替换、heredoc 等），必须返回 AskDecision 或 DenyDecision
+        而不是 None——绝不允许因"看起来像已知安全命令"就 passthrough，那会
+        制造比"不做子命令匹配"更危险的假安全边界。这是 fail-closed 原则。
+
+        Args:
+            tool_input: 模型传入的参数。
+            context: 当前权限上下文，含 allow/deny/ask 规则集合与模式。
+
+        Returns:
+            AllowDecision / DenyDecision / AskDecision 表示工具的明确判定；
+            None 表示 passthrough，交给流水线后续步骤决定。
+        """
+        return None
 
     def is_read_only(self, tool_input: dict[str, Any]) -> bool:
         """返回本次调用是否为只读操作，默认为 False（假设有写操作）。
