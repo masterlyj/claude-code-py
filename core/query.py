@@ -98,7 +98,10 @@ async def query(
         anthropic.APIError: API 调用失败时透传原始异常。
     """
     state = QueryState(messages=list(params.messages))
-    client = anthropic.AsyncAnthropic(api_key=params.api_key)
+    client = anthropic.AsyncAnthropic(
+        api_key=params.api_key,
+        base_url=params.base_url,
+    )
     tool_schemas = [t.to_api_schema() for t in tools]
     stopped_reason: str = "end_turn"
 

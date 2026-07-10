@@ -42,6 +42,8 @@ class QueryParams(BaseModel):
         max_tokens: 单次响应最大 token 数。
         max_turns: 工具调用最大轮次，None 表示不限。
         api_key: Anthropic API Key，None 时从环境变量 ANTHROPIC_API_KEY 读取。
+        base_url: 覆盖 Anthropic API 的基础 URL，用于走兼容的第三方端点；
+            None 时使用 SDK 默认或环境变量 ANTHROPIC_BASE_URL。
     """
 
     messages: list[dict[str, Any]]
@@ -50,6 +52,7 @@ class QueryParams(BaseModel):
     max_tokens: int = Field(default=8096, gt=0)
     max_turns: int | None = Field(default=None, gt=0)
     api_key: str | None = None
+    base_url: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -68,6 +71,7 @@ class EngineConfig(BaseModel):
         max_turns_per_submit: 单次 submit_message() 的工具调用轮次上限；
             None 表示不限，防止死循环。
         api_key: Anthropic API Key，None 时从环境变量 ANTHROPIC_API_KEY 读取。
+        base_url: 覆盖 Anthropic API 的基础 URL；参考 QueryParams.base_url。
     """
 
     system_prompt: str
@@ -75,6 +79,7 @@ class EngineConfig(BaseModel):
     max_tokens: int = Field(default=8096, gt=0)
     max_turns_per_submit: int | None = Field(default=None, gt=0)
     api_key: str | None = None
+    base_url: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 

@@ -138,6 +138,7 @@ class QueryEngine:
             max_tokens=self._config.max_tokens,
             max_turns=self._config.max_turns_per_submit,
             api_key=self._config.api_key,
+            base_url=self._config.base_url,
         )
 
         result_subtype: str = "success"

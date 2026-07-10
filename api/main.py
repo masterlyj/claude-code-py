@@ -115,8 +115,12 @@ class AskAnswer(BaseModel):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """启动/退出钩子：只用来 load .env，不做别的重活。"""
-    load_dotenv()
+    """启动钩子：加载 .env 到进程环境，覆盖已存在的同名变量。
+
+    override=True 让项目 .env 作为权威配置源：ANTHROPIC_API_KEY /
+    ANTHROPIC_BASE_URL 等应以项目配置为准，而不是被外层 shell 环境覆盖。
+    """
+    load_dotenv(override=True)
     yield
 
 
@@ -208,6 +212,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         system_prompt=req.system_prompt,
         model=req.model,
         api_key=api_key,
+        base_url=os.getenv("ANTHROPIC_BASE_URL"),
         max_turns_per_submit=req.max_turns,
     )
 
