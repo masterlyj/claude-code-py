@@ -1,31 +1,50 @@
 <script setup lang="ts">
-import { NConfigProvider, NLayout, NLayoutSider, NLayoutContent, darkTheme } from 'naive-ui'
+import { onMounted } from 'vue'
+import {
+  NConfigProvider,
+  NLayout,
+  NLayoutContent,
+  NLayoutSider,
+  NMessageProvider,
+  darkTheme,
+} from 'naive-ui'
+import MessageStream from '@/components/MessageStream.vue'
+import ChatInput from '@/components/ChatInput.vue'
 import { useSessionStore } from '@/stores/sessions'
-import { useChatStore } from '@/stores/chat'
 
-// 先建 stores（Pinia 需要 app.use 之后才能用；此文件通过 setup 语法自动
-// 保证在 createPinia 挂载后执行）
 const sessionStore = useSessionStore()
-const chatStore = useChatStore()
 
-// 阶段 3 才会填对话流组件，这里先占位确认脚手架跑通
-void sessionStore
-void chatStore
+// 首次打开时如果没有任何会话，建一个空的作为初始工作面。
+// 阶段 5 会实现完整侧栏（列表 + 新建 + 删除），本阶段先保证主界面可用。
+onMounted(() => {
+  if (sessionStore.sessions.length === 0) {
+    sessionStore.createSession()
+  }
+})
 </script>
 
 <template>
   <n-config-provider :theme="darkTheme">
-    <n-layout has-sider style="height: 100vh">
-      <n-layout-sider :width="260" bordered content-style="padding: 16px">
-        <div style="opacity: 0.5">会话侧栏（阶段 5 实现）</div>
-      </n-layout-sider>
-      <n-layout-content content-style="padding: 24px">
-        <div style="opacity: 0.5">
-          阶段 2 脚手架已就绪。<br />
-          下一步：阶段 3 会在这里渲染对话流。
-        </div>
-      </n-layout-content>
-    </n-layout>
+    <n-message-provider>
+      <n-layout has-sider style="height: 100vh; background: #12151d">
+        <n-layout-sider
+          :width="240"
+          bordered
+          content-style="padding: 16px; color: #b9bec9;"
+        >
+          <div class="sider-title">claude-code-py</div>
+          <div class="sider-placeholder">
+            会话列表<br />（阶段 5）
+          </div>
+        </n-layout-sider>
+        <n-layout-content
+          content-style="display: flex; flex-direction: column; height: 100vh;"
+        >
+          <MessageStream />
+          <ChatInput />
+        </n-layout-content>
+      </n-layout>
+    </n-message-provider>
   </n-config-provider>
 </template>
 
@@ -35,5 +54,20 @@ html, body, #app {
   padding: 0;
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #12151d;
+}
+</style>
+
+<style scoped>
+.sider-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e6e8ee;
+  margin-bottom: 12px;
+}
+.sider-placeholder {
+  font-size: 12px;
+  color: #6a7280;
+  line-height: 1.6;
 }
 </style>
