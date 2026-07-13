@@ -52,7 +52,20 @@ export const useChatStore = defineStore('chat', () => {
   let handle: ChatStreamHandle | null = null
   let agg: AssistantAggregation = freshAggregation()
 
-  const canSend = computed(() => !isStreaming.value)
+  /** 当前会话里状态仍为 pending 的 Ask 卡片。顺序即出现顺序，
+   *  UI 用它决定给谁自动 focus / 显示"下一个"提示。 */
+  const pendingAsks = computed(() => {
+    const s = sessionStore.currentSession
+    if (!s) return []
+    return s.timeline.filter(
+      (t) => t.kind === 'ask' && t.ask_state === 'pending',
+    )
+  })
+
+  const hasPendingAsk = computed(() => pendingAsks.value.length > 0)
+
+  // 有 pending Ask 时也阻止发送——用户应该先处理完权限确认再继续对话
+  const canSend = computed(() => !isStreaming.value && !hasPendingAsk.value)
 
   function appendTimeline(item: TurnItem): void {
     const s = sessionStore.currentSession
@@ -277,6 +290,8 @@ export const useChatStore = defineStore('chat', () => {
     runId,
     errorMessage,
     canSend,
+    pendingAsks,
+    hasPendingAsk,
     sendPrompt,
     respondAsk,
     stop,
