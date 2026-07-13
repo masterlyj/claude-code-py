@@ -16,6 +16,7 @@ import type {
   TurnItem,
 } from '@/types/session'
 import { useSessionStore } from './sessions'
+import { useSettingsStore } from './settings'
 
 interface AssistantAggregation {
   /** 当前正在流式累积的助手文本 turn item id，方便持续 append text_delta。 */
@@ -44,6 +45,7 @@ function freshAggregation(): AssistantAggregation {
 
 export const useChatStore = defineStore('chat', () => {
   const sessionStore = useSessionStore()
+  const settingsStore = useSettingsStore()
 
   const isStreaming = ref(false)
   const runId = ref<string | null>(null)
@@ -203,7 +205,24 @@ export const useChatStore = defineStore('chat', () => {
         break
 
       case 'submit_result':
-        // 最终统计事件，可用于展示 usage；这里暂时忽略
+        // 累加本次 submit 的 total_usage 到会话级 lastUsage。
+        // 后端 QueryEngine 是每次 /chat 请求新建的（api/main.py 是 stateless），
+        // 所以 event.total_usage 只是"本次 submit 内跨轮次"的累积；跨多次
+        // submit_message 的累加要在前端自己做。key-wise 相加保证新 key
+        // （比如未来后端加了新的 usage 字段）也能自然合并进来；typeof
+        // === 'number' 守卫防止未来推非数值字段时 NaN 污染。
+        {
+          const s = owningSession()
+          if (s) {
+            const prev = s.lastUsage ?? {}
+            const next: Record<string, number> = { ...prev }
+            for (const [k, v] of Object.entries(event.total_usage)) {
+              if (typeof v !== 'number') continue
+              next[k] = (next[k] ?? 0) + v
+            }
+            s.lastUsage = next
+          }
+        }
         break
 
       case 'error':
@@ -251,6 +270,12 @@ export const useChatStore = defineStore('chat', () => {
       {
         prompt,
         messages: history,
+        permission_mode: settingsStore.permissionMode,
+        rules: {
+          allow: settingsStore.allowRules,
+          deny: settingsStore.denyRules,
+          ask: settingsStore.askRules,
+        },
       },
       handleEvent,
     )

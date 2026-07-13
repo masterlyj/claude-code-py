@@ -68,4 +68,7 @@ export interface Session {
   messages: AnthropicMessage[]
   // 展示层视图：跨会话切换时直接用，不用从 messages 反推
   timeline: TurnItem[]
+  /** 最近一次 SubmitResultEvent 携带的 total_usage 快照——后端会跨轮次
+   *  累加 input/output/cache_read tokens，前端只要照搬展示即可。 */
+  lastUsage?: Record<string, number>
 }

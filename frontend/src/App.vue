@@ -12,6 +12,8 @@ import {
 import MessageStream from '@/components/MessageStream.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import SessionSidebar from '@/components/SessionSidebar.vue'
+import UsagePanel from '@/components/UsagePanel.vue'
+import ErrorToaster from '@/components/ErrorToaster.vue'
 import { useSessionStore } from '@/stores/sessions'
 
 const sessionStore = useSessionStore()
@@ -39,10 +41,12 @@ onMounted(() => {
           <n-layout-content
             content-style="display: flex; flex-direction: column; height: 100vh;"
           >
+            <UsagePanel />
             <MessageStream />
             <ChatInput />
           </n-layout-content>
         </n-layout>
+        <ErrorToaster />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>

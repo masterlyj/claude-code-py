@@ -9,6 +9,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { useSessionStore } from '@/stores/sessions'
+import { useChatStore } from '@/stores/chat'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
 import ToolUseCard from './ToolUseCard.vue'
@@ -16,10 +17,23 @@ import ToolResultCard from './ToolResultCard.vue'
 import AskConfirmCard from './AskConfirmCard.vue'
 
 const sessionStore = useSessionStore()
+const chatStore = useChatStore()
 const container = ref<HTMLElement | null>(null)
 const followBottom = ref(true)
 
 const timeline = computed(() => sessionStore.currentSession?.timeline ?? [])
+
+const EXAMPLE_PROMPTS = [
+  '列出当前目录下的所有 .py 文件',
+  '读取 README.md 前 20 行',
+  '解释一下 core/query.py 里的 Agent 循环',
+]
+
+function useExample(prompt: string): void {
+  if (chatStore.canSend) {
+    void chatStore.sendPrompt(prompt)
+  }
+}
 
 // 是否处于"接近底部"的状态。用 32px 阈值给用户一点缓冲。
 function isNearBottom(el: HTMLElement): boolean {
@@ -60,7 +74,18 @@ watch(
 <template>
   <div class="message-stream" ref="container" @scroll="onScroll">
     <div v-if="timeline.length === 0" class="empty">
-      在下方输入框开始一个新的对话。
+      <div class="empty-title">在下方输入框开始一个新的对话</div>
+      <div class="empty-subtitle">或试试这些示例：</div>
+      <div class="examples">
+        <button
+          v-for="p in EXAMPLE_PROMPTS"
+          :key="p"
+          class="example-btn"
+          @click="useExample(p)"
+        >
+          {{ p }}
+        </button>
+      </div>
     </div>
     <template v-for="item in timeline" :key="item.id">
       <UserMessage
@@ -112,6 +137,35 @@ watch(
   text-align: center;
   color: #7a8296;
   font-size: 14px;
+}
+.empty-title {
+  color: #b9bec9;
+  margin-bottom: 4px;
+}
+.empty-subtitle {
+  font-size: 12px;
+  color: #6a7280;
+  margin-bottom: 12px;
+}
+.examples {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.example-btn {
+  padding: 8px 16px;
+  background: #1c2130;
+  border: 1px solid #2a3040;
+  border-radius: 20px;
+  color: #b9bec9;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.example-btn:hover {
+  background: #263041;
+  border-color: #3a4560;
 }
 .error-line {
   max-width: 780px;

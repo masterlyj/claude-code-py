@@ -12,6 +12,7 @@
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog } from 'naive-ui'
 import { useSessionStore } from '@/stores/sessions'
+import SettingsPanel from './SettingsPanel.vue'
 
 const sessionStore = useSessionStore()
 const dialog = useDialog()
@@ -101,6 +102,10 @@ function formatCreatedAt(ts: number): string {
         </button>
       </div>
     </div>
+
+    <div class="settings-region">
+      <SettingsPanel />
+    </div>
   </div>
 </template>
 
@@ -135,6 +140,12 @@ function formatCreatedAt(ts: number): string {
   flex: 1;
   overflow-y: auto;
   margin: 0 -4px;
+}
+.settings-region {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2a3040;
+  flex-shrink: 0;
 }
 .session-item {
   display: flex;
