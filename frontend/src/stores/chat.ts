@@ -7,7 +7,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { ChatStreamHandle } from '@/api/sse'
 import { streamChat, answerAsk, abortRun } from '@/api/sse'
 import type { SseEvent } from '@/types/events'
@@ -52,6 +52,16 @@ export const useChatStore = defineStore('chat', () => {
   let handle: ChatStreamHandle | null = null
   let agg: AssistantAggregation = freshAggregation()
 
+  /** 当前正在流式的运行所归属的 session id。SSE 事件到达时通过它写入
+   *  发起时的会话，而不是 sessionStore.currentSession——避免用户在流式
+   *  过程中切换会话时，迟到的 SSE 事件被错误写进新会话。 */
+  let owningSessionId: string | null = null
+
+  function owningSession() {
+    if (!owningSessionId) return null
+    return sessionStore.sessions.find((s) => s.id === owningSessionId) ?? null
+  }
+
   /** 当前会话里状态仍为 pending 的 Ask 卡片。顺序即出现顺序，
    *  UI 用它决定给谁自动 focus / 显示"下一个"提示。 */
   const pendingAsks = computed(() => {
@@ -68,7 +78,7 @@ export const useChatStore = defineStore('chat', () => {
   const canSend = computed(() => !isStreaming.value && !hasPendingAsk.value)
 
   function appendTimeline(item: TurnItem): void {
-    const s = sessionStore.currentSession
+    const s = owningSession()
     if (!s) return
     s.timeline.push(item)
   }
@@ -78,7 +88,7 @@ export const useChatStore = defineStore('chat', () => {
    * 一次助手回合结束（收到 message_complete 且未请求工具）或整个循环结束时调用。
    */
   function flushAssistantMessage(): void {
-    const s = sessionStore.currentSession
+    const s = owningSession()
     if (!s) return
     if (agg.contentBlocks.length === 0) return
     const msg: AnthropicMessage = {
@@ -100,7 +110,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function flushToolResults(): void {
-    const s = sessionStore.currentSession
+    const s = owningSession()
     if (!s) return
     if (agg.toolResults.length === 0) return
     s.messages.push({ role: 'user', content: agg.toolResults })
@@ -114,8 +124,10 @@ export const useChatStore = defineStore('chat', () => {
         break
 
       case 'text_delta': {
-        // 把 delta 追加到当前助手文本 item（或创建新 item）
-        const s = sessionStore.currentSession
+        // 把 delta 追加到助手文本 item（或创建新 item）
+        // 用 owningSession() 而不是 sessionStore.currentSession——如果
+        // 用户在流式过程中切换了会话，这条 event 也只能写回发起时的会话
+        const s = owningSession()
         if (!s) return
         if (agg.textItemId === null) {
           const id = crypto.randomUUID()
@@ -225,6 +237,9 @@ export const useChatStore = defineStore('chat', () => {
 
     errorMessage.value = null
     agg = freshAggregation()
+    // 锁定发起时的会话 id；后续所有 SSE 事件都写回这个会话，即使用户
+    // 中途切换到别的会话也不会把 delta 泄漏进去
+    owningSessionId = s.id
 
     // 组装请求：把当前 messages 全量带给后端（含刚 push 的这条 user），
     // 但要把最新一条剥出来作为 prompt——api.main 的 ChatRequest 语义：
@@ -256,6 +271,7 @@ export const useChatStore = defineStore('chat', () => {
       isStreaming.value = false
       runId.value = null
       handle = null
+      owningSessionId = null
     }
   }
 
@@ -284,6 +300,56 @@ export const useChatStore = defineStore('chat', () => {
     }
     handle?.abort()
   }
+
+  /**
+   * 切换/关闭 leaving 会话时的瞬态状态清理：中止进行中的 SSE、把 leaving
+   * 会话 timeline 里的 pending Ask 强制置为 rejected（用户切走等价于放弃
+   * 权限确认）、清空聚合器与错误。留下的持久化数据（timeline、messages）
+   * 不动，因为会话切走后它们还要用来展示。
+   *
+   * 必须传入 leavingSessionId 而不是访问 sessionStore.currentSession——
+   * 因为本函数由 watch(currentSessionId) 触发，触发时 id 已经指向新会话，
+   * 从 currentSession 拿会拿到 entering 会话，误标它的 Ask。
+   */
+  function resetForSessionSwitch(leavingSessionId: string): void {
+    if (handle) {
+      handle.abort()
+      handle = null
+    }
+    if (runId.value) {
+      // fire-and-forget：切会话时不阻塞用户，让后端自己收尾
+      void abortRun(runId.value).catch(() => {})
+    }
+    // 只清 leaving 会话的 pending Ask，避免误伤别的会话
+    const leaving = sessionStore.sessions.find((s) => s.id === leavingSessionId)
+    if (leaving) {
+      for (const item of leaving.timeline) {
+        if (item.kind === 'ask' && item.ask_state === 'pending') {
+          item.ask_state = 'rejected'
+        }
+      }
+    }
+    isStreaming.value = false
+    runId.value = null
+    errorMessage.value = null
+    agg = freshAggregation()
+    owningSessionId = null
+  }
+
+  // 会话切换时自动清理瞬态状态：sessionStore.currentSessionId 是权威源，
+  // chat store 只是它的下游消费者，用 watch 而不是让 sessionStore 反向
+  // 调 chatStore 方法，保持依赖方向 chat → sessions 单向。
+  //
+  // 只在真的从"某个会话"切到"另一个 / 无会话"时清理；从 null 首次挂载
+  // 到新建会话不算切换，chatStore 此时本来就是新鲜态。
+  watch(
+    () => sessionStore.currentSessionId,
+    (newId, oldId) => {
+      if (oldId && oldId !== newId) {
+        resetForSessionSwitch(oldId)
+      }
+    },
+  )
 
   return {
     isStreaming,
