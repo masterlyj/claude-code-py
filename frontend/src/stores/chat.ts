@@ -17,6 +17,7 @@ import type {
 } from '@/types/session'
 import { useSessionStore } from './sessions'
 import { useSettingsStore } from './settings'
+import { repairToolPairing } from '@/lib/messages'
 
 interface AssistantAggregation {
   /** 当前正在流式累积的助手文本 turn item id，方便持续 append text_delta。 */
@@ -125,6 +126,16 @@ export const useChatStore = defineStore('chat', () => {
         runId.value = event.run_id
         break
 
+      case 'stream_request_start':
+        // 后端开始新一轮 LLM 调用。此刻是把上一轮的 tool_results 落进
+        // messages 的合适边界——tool_result 事件之后到 stream_request_start
+        // 之前，agg.toolResults 已经收齐；不 flush 掉的话，assistant 消息
+        // 带的 tool_use 会永远缺少对应的 tool_result，下次 sendPrompt 提交
+        // 时被 Anthropic API 400 拒绝。message_complete 分支不能承担这个
+        // 职责，因为它在 tool_result 事件到达 *之前* 就触发了。
+        flushToolResults()
+        break
+
       case 'text_delta': {
         // 把 delta 追加到助手文本 item（或创建新 item）
         // 用 owningSession() 而不是 sessionStore.currentSession——如果
@@ -197,10 +208,11 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       case 'message_complete':
-        // 一次助手轮次结束：把 assistant 消息落到 messages，
-        // 如果之前累积了 tool_result，也一起 flush（工具轮次之间的边界）
+        // 一次 LLM 响应结束：把当前累积的 assistant content blocks（含
+        // tool_use）落进 messages。不 flush toolResults——tool_result
+        // 事件在 message_complete 之后才到达，flush 的时机在下一次
+        // stream_request_start 或整个流结束时（finally 里）。
         flushAssistantMessage()
-        flushToolResults()
         agg.textItemId = null
         break
 
@@ -263,6 +275,12 @@ export const useChatStore = defineStore('chat', () => {
     // 组装请求：把当前 messages 全量带给后端（含刚 push 的这条 user），
     // 但要把最新一条剥出来作为 prompt——api.main 的 ChatRequest 语义：
     // messages = 之前累计历史；prompt = 本次新输入
+    //
+    // 剥之前先修一遍配对：中断路径（stop / 断线 / 切会话）可能让历史停在
+    // "assistant 带 tool_use 但没有完整 tool_result"的状态，而这份历史是权威
+    // 版本，带上去会被 Anthropic API 400 拒绝，坏数据还会留在 localStorage
+    // 让该会话此后每次提交都失败。详见 lib/messages.ts。
+    repairToolPairing(s.messages)
     const history = s.messages.slice(0, -1)
 
     isStreaming.value = true
