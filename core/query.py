@@ -184,11 +184,33 @@ async def query(
         # 判断是否需要继续：模型未请求工具或工具列表为空时结束
         if stop_reason != "tool_use" or not pending_tool_uses:
             stopped_reason = "end_turn"
+            # stop_reason 不是 tool_use 却带回 tool_use block 的现实场景是
+            # max_tokens 截断：响应被砍断，但已流出的 tool_use block 是完整的。
+            # 这条路径的历史同样会被调用方吸收并重放，所以也要补齐 tool_result。
+            if pending_tool_uses:
+                async for event in _emit_synthetic_tool_results(
+                    pending_tool_uses,
+                    f"本轮响应因 {stop_reason} 提前结束，工具未执行",
+                    state,
+                ):
+                    yield event
             break
 
         # 检查轮次限制：超过最大轮次时强制结束
+        # 此时刚 emit 的 assistant 消息里已经有 tool_use blocks，Anthropic
+        # API 强约束要求 tool_use 必须紧跟着 tool_result；如果就这样 break，
+        # 下次调用方拿这段 messages 重放会被 API 400 拒绝。为每个未执行的
+        # tool_use 合成一条"因轮次上限跳过"的 tool_result，保持消息序列合规。
         if params.max_turns is not None and state.turn_count >= params.max_turns:
             stopped_reason = "max_turns"
+            async for event in _emit_synthetic_tool_results(
+                pending_tool_uses,
+                "因达到 max_turns 上限，工具未执行",
+                state,
+            ):
+                yield event
+            # _emit_synthetic_tool_results 内部已经把 tool_results 追加进
+            # state.messages，这里不再重复追加
             break
 
         # 执行本轮所有工具调用，批量收集结果后一次性追加为 user 消息
@@ -298,3 +320,52 @@ async def _execute_tool(
         return "".join(chunks), False
     except Exception as exc:  # noqa: BLE001
         return f"工具执行失败：{exc}", True
+
+
+async def _emit_synthetic_tool_results(
+    pending_tool_uses: list[dict[str, Any]],
+    reason: str,
+    state: QueryState,
+) -> AsyncIterator[StreamEvent]:
+    """为未执行的 tool_use blocks 合成对应的 tool_result 事件与消息条目。
+
+    Anthropic API 强约束：assistant 消息里的每个 tool_use block，紧跟着的
+    user 消息必须包含所有对应的 tool_result。循环里有两处 break 会留下
+    "已 emit tool_use 但不会执行"的残局：max_turns 上限，以及 stop_reason
+    不是 tool_use 却带回 tool_use block（max_tokens 截断）。两处都要补齐，
+    否则下次调用方带着这段 messages 重放会被 API 400 拒绝。
+
+    abort 与异常不需要走这里：abort 在轮次开头检查，那一刻 messages 必定
+    以 tool_result 消息结尾；异常时本函数所在循环不会 yield
+    QueryCompleteEvent，外层吸收不到这段历史（见 core/engine.py）。
+
+    本函数以 fail-closed 的方式补齐：为每个 pending tool_use 生成 is_error=True
+    的 tool_result（内容是给定的 reason），既 yield 事件让前端 timeline 可见，
+    也直接改写 state.messages 追加对应的 user 消息。
+
+    Args:
+        pending_tool_uses: 已 emit 但尚未执行的 tool_use 列表（含 id/name/input）。
+        reason: 展示给模型/前端的跳过原因，比如 "因达到 max_turns 上限"。
+        state: 当前 QueryState，函数就地在 messages 里追加合成的 user 消息。
+    """
+    if not pending_tool_uses:
+        return
+
+    synthetic_results: list[dict[str, Any]] = []
+    for tool_use in pending_tool_uses:
+        yield ToolResultEvent(
+            tool_use_id=tool_use["id"],
+            tool_name=tool_use["name"],
+            content=reason,
+            is_error=True,
+        )
+        synthetic_results.append({
+            "type": "tool_result",
+            "tool_use_id": tool_use["id"],
+            "content": reason,
+            "is_error": True,
+        })
+
+    # 直接改写 state.messages——本函数被调用时循环马上 break，之后 state 只
+    # 用于 QueryCompleteEvent.final_messages，追加一次即可保持消息序列合规
+    state.messages.append({"role": "user", "content": synthetic_results})
