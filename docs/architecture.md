@@ -17,20 +17,22 @@ LLM Agent 的本质是一个循环：
 直到模型认为任务完成，不再需要工具，才输出最终答案。
 
 ```python
-async def query(messages, options):
+async def query(params, tools, permission_manager, abort_event=None):
+    state = QueryState(messages=list(params.messages))
     while True:
-        # 1. 流式调用 LLM
-        response = await call_llm(messages, options)
+        if abort_event is not None and abort_event.is_set():
+            break                              # 中止信号在轮次边界响应
 
-        # 2. 如果模型不需要工具，结束
+        response = await call_llm(state.messages, params)
+
         if response.stop_reason != "tool_use":
-            break
+            break                              # 模型不需要工具，结束
 
-        # 3. 执行模型请求的工具
-        tool_results = await execute_tools(response.tool_calls)
+        tool_results = await execute_tools(response.tool_calls)  # 权限校验 → 参数校验 → 执行
+        state = QueryState(messages=state.messages + [tool_results], turn_count=state.turn_count + 1)
+        # 继续循环，把工具结果发回给模型
 
-        # 4. 把工具结果加入对话，继续下一轮
-        messages.append(tool_results)
+    yield QueryCompleteEvent(final_messages=state.messages, ...)  # 交给上层（QueryEngine）吸收
 ```
 
 ## 架构
@@ -40,9 +42,9 @@ claude-code-py/
   core/         # 核心：query.py（单轮循环）、engine.py（多轮会话编排）、models.py（对外契约）
   tools/        # 工具系统：base.py（接口）、bash.py、file_read.py 等
   permissions/  # 权限系统：哪些工具可以在什么条件下执行
-  api/          # FastAPI 服务：SSE 流式推送给前端（待实现）
+  api/          # FastAPI 服务：SSE 流式推送给前端
   scripts/      # 端到端手动烟测：真实 API 观察事件流
-  tests/        # pytest：回归测试（48 个）
+  tests/        # pytest：回归测试（92 个）
   docs/         # 文档：架构说明、工具接口、TS↔Python 对照
 ```
 
@@ -78,14 +80,14 @@ claude-code-py/
 # 克隆后安装依赖
 uv sync
 
-# 运行测试（48 个，全绿）
+# 运行测试（92 个，全绿）
 uv run pytest
 
 # 端到端手动烟测（需 .env 里配置 ANTHROPIC_API_KEY）
 uv run python scripts/demo_query.py            # 全部场景
 uv run python scripts/demo_query.py session    # 仅 QueryEngine 多轮对话
 
-# 启动 API 服务（待实现后可用）
+# 启动 API 服务（前端开发时用）
 uv run uvicorn api.main:app --reload
 ```
 
@@ -95,7 +97,7 @@ uv run uvicorn api.main:app --reload
 |------|------|---------|------|
 | 1 | `core/query.py` | Agent 循环的核心：如何递归处理工具调用 | ✅ |
 | 2 | `tools/base.py` → `tools/bash.py` | 工具的抽象接口与具体实现 | ✅ |
-| 3 | `permissions/rules.py` + `manager.py` | 权限规则解析与五步决策流水线 | ✅ |
+| 3 | `permissions/rules.py` + `manager.py` | 权限规则解析与六步决策流水线 | ✅ |
 | 4 | `tools/registry.py` | 工具注册与查找机制 | ✅ |
 | 5 | `core/engine.py` | 会话状态管理和多轮消息累积 | ✅ |
 | 6 | `api/main.py` | 流式事件通过 SSE 推送到前端 | 🔲 |

@@ -21,7 +21,7 @@ uv run pytest -v
 uv run pytest -s
 ```
 
-当前测试数量：**39 个，全部通过**。
+当前测试数量：**92 个，全部通过**。
 
 ---
 
@@ -31,8 +31,14 @@ uv run pytest -s
 |------|---------|-------|
 | `tests/conftest.py` | 公共 fixture | — |
 | `tests/test_permissions.py` | `permissions/rules.py` + `permissions/manager.py` | 16 |
+| `tests/test_bash_parse.py` | `permissions/bash_parse.py`（失败一律判 too-complex 的 fail-closed 回归防线） | 16 |
+| `tests/test_bash_permissions.py` | `tools/bash.py` 的 `check_permissions`（子命令级规则匹配 + fail-closed） | 11 |
 | `tests/test_tools.py` | `tools/bash.py` + `tools/file_read.py` + `tools/file_edit.py` + `tools/file_write.py` | 15 |
 | `tests/test_registry.py` | `tools/registry.py` | 8 |
+| `tests/test_query.py` | `core/query.py` 本体（monkeypatch 替换 `anthropic.AsyncAnthropic`，覆盖循环提前退出时的 synthetic tool_result 等边界） | 3 |
+| `tests/test_engine.py` | `core/engine.py`（`QueryEngine` 会话编排，monkeypatch 替换 `core.engine.query` 脱机运行） | 9 |
+| `tests/test_ask_closure.py` | Ask 决策的闭环（`ask_user` 返回 True/False/未提供三种分支） | 6 |
+| `tests/test_api.py` | `api/main.py`（SSE 流、Ask 闭环、abort、错误路径，monkeypatch 替换 `api.main.QueryEngine`） | 8 |
 
 ### conftest.py
 

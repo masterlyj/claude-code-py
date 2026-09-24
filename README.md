@@ -28,18 +28,24 @@ Vue 前端             ← 实时渲染消息（frontend/ — 后期）
 ## 核心循环（整个系统的灵魂）
 
 ```python
-async def query(messages, options):
+async def query(params, tools, permission_manager, abort_event=None):
+    state = QueryState(messages=list(params.messages))
     while True:
+        if abort_event is not None and abort_event.is_set():
+            break                        # 中止信号在轮次边界响应
+
         async with client.messages.stream(...) as stream:
             async for event in stream:
-                yield event          # 通过 SSE 推送给前端
+                yield event              # 通过 SSE 推送给前端
 
         if stop_reason != "tool_use":
-            break                    # 对话结束，退出循环
+            break                        # 对话结束，退出循环
 
-        tool_results = await execute_tools(...)
-        messages.append({"role": "user", "content": tool_results})
+        tool_results = await execute_tools(...)  # 权限校验 → 参数校验 → 执行
+        state = QueryState(messages=state.messages + [...])
         # 继续循环，把工具结果发回给模型
+
+    yield QueryCompleteEvent(final_messages=state.messages, ...)  # 交给上层（QueryEngine）
 ```
 
 ## 目录结构
@@ -58,7 +64,7 @@ claude-code-py/
     file_write.py     # FileWriteTool（已实现）
     registry.py       # 工具注册表 get_tools() / find_tool()（已实现）
   permissions/
-    manager.py        # 五步权限决策流水线（已实现）
+    manager.py        # 六步权限决策流水线（已实现）
     rules.py          # 规则类型 + 解析（支持 Bash(git:*) 通配符）（已实现）
   api/
     main.py           # FastAPI 入口 + SSE 端点（待实现）
@@ -69,9 +75,11 @@ claude-code-py/
     test_permissions.py     # 权限系统测试（16 个）
     test_tools.py           # 工具测试（15 个）
     test_registry.py        # 注册表测试（8 个）
+    test_engine.py          # 会话编排层测试（9 个）
   docs/
     architecture.md   # 架构说明（公开）
     tools.md          # 工具接口文档（公开）
+    testing.md        # 测试组织与规范（公开）
     mapping.md        # TS ↔ Python 对照表（本地，不提交）
 ```
 
@@ -91,13 +99,14 @@ claude-code-py/
 # 安装依赖
 uv sync
 
-# 运行测试
+# 运行测试（92 个）
 uv run pytest
 
 # 端到端手动烟测：真实调用一次 API 观察事件流
-uv run python scripts/demo_query.py          # 跑两个场景
+uv run python scripts/demo_query.py          # 三个场景：chat / tools / session
 uv run python scripts/demo_query.py chat     # 仅纯对话
 uv run python scripts/demo_query.py tools    # 仅工具调用循环
+uv run python scripts/demo_query.py session  # 仅 QueryEngine 多轮对话
 
 # 启动 API 服务（api/main.py 待实现后可用）
 # uv run uvicorn api.main:app --reload
@@ -107,8 +116,8 @@ uv run python scripts/demo_query.py tools    # 仅工具调用循环
 
 | 步骤 | 文件 | 学到什么 | 状态 |
 |------|------|---------|------|
-| 1 | `core/query.py` | Agent 循环的核心：如何递归处理工具调用 | ✅ 已实现 |
+| 1 | `core/query.py` + `core/models.py` | Agent 循环的核心：如何递归处理工具调用 | ✅ 已实现 |
 | 2 | `tools/base.py` + `tools/bash.py` | 工具的定义方式和执行机制 | ✅ 已实现 |
-| 3 | `permissions/manager.py` | 权限系统：规则引擎和模式决策 | ✅ 已实现 |
+| 3 | `permissions/manager.py` | 权限系统：规则引擎和模式决策（六步流水线） | ✅ 已实现 |
 | 4 | `core/engine.py` | 会话状态、多轮消息累积、中止响应 | ✅ 已实现 |
 | 5 | `api/main.py` | 流式事件通过 SSE 推送到前端 | 🔲 待实现 |
